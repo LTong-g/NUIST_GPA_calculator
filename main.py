@@ -2,10 +2,23 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageDraw, ImageFont
 import datetime
-import camelot
-import pandas as pd
-import PyPDF2
 import os
+from app.constants import (
+    BEND_RELATIONSHIP_1,
+    BEND_RELATIONSHIP_2,
+    PDF_STOP_KEYWORD,
+    PDF_TITLE_KEYWORD,
+    PURE_SCORE_RELATIONSHIP,
+)
+from app.services.gpa_service import calculate
+from app.services.pdf_import_service import is_valid_score_pdf, parse_score_rows
+from app.ui.ui_actions import (
+    clear_entries,
+    clear_result_label,
+    reset_blank_rows,
+    set_clipboard_content,
+)
+from app.ui.theme import get_theme_colors
 
 
 # handle字典
@@ -13,15 +26,11 @@ handle = {"window_help_open?": 0,
           "skin": "day",
           "error_data_included?": 0}
 
-pure_score_relationship = {"优": 92, "优秀": 92, "良": 85, "良好": 85, "中": 75, "中等": 75, "及格": 65, "不及格": 0}
+pure_score_relationship = PURE_SCORE_RELATIONSHIP
 
-bend_relationship_1 = {100: 5.0, 96: 4.8, 93: 4.5,
-                       90: 4.0, 86: 3.8, 83: 3.5,
-                       80: 3.0, 76: 2.8, 73: 2.5,
-                       70: 2.0, 66: 1.8, 63: 1.5,
-                       60: 1.0, 0: 0.0}
+bend_relationship_1 = BEND_RELATIONSHIP_1
 
-bend_relationship_2 = {"优": 4.0, "优秀": 4.0, "良": 3.5, "良好": 3.5, "中": 2.5, "中等": 2.5, "及格": 1.5, "不及格": 0.0}
+bend_relationship_2 = BEND_RELATIONSHIP_2
 
 labels = []  # label列表
 entries = []  # entry列表
@@ -39,6 +48,7 @@ color_entry_bg = "#f0f0f0"  # 设置输入框初始background
 
 # 设置默认输入框文字
 def set_default_entry_words():
+    """Set placeholder text and default color for the three input boxes."""
     entry_term.configure(fg="grey")
     entry_term.insert(0, '可不填')
     entry_course_name.configure(fg="grey")
@@ -47,54 +57,10 @@ def set_default_entry_words():
     entry_nature.insert(0, '输入包含“选”字为选修课，否则为必修')
 
 
-# 重设空行
-def reset_blank_row():
-    for child in table.get_children():
-        if not table.item(child)["values"]:
-            table.delete(child)
-    if 8 - len(table.get_children()) >= 0:
-        for _ in range(8 - len(table.get_children())):
-            table.insert("", "end", tags="row", values=())
-
-
-# 清空输入框
-def clean_entries():
-    for entry in entries:
-        entry.delete(0, 'end')
-
-
-# 清空计算结果
-def delete_label_result():
-    global label_result
-    if type(label_result) != int:
-        for _ in range(len(root.grid_slaves(row=6, column=2))):
-            root.grid_slaves(row=6, column=2)[0].grid_forget()
-
-
-# 设置剪贴板内容
-def set_clipboard_content(content):
-    root.clipboard_clear()  # 清空剪贴板
-    root.clipboard_append(content)  # 设置剪贴板内容
-    root.update()  # 更新剪贴板
-
-
-# 计算课程绩点（对应关系）
-def calculate(score):
-    # 如果是等级制
-    if score in bend_relationship_2.keys():
-        return bend_relationship_2[score]
-    # 如果是分数值
-    else:
-        for key, value in bend_relationship_1.items():
-            if score >= key:
-                return value
-            else:
-                continue
-
-
 # 添加成绩（按钮）
 def add_score():
-    delete_label_result()  # 清空绩点计算结果
+    """Validate form input and append one score record into the table."""
+    clear_result_label(root=root, label_result=label_result, row=6, column=2)  # 清空绩点计算结果
 
     # 从输入框获取输入的成绩信息
     term = entry_term.get()
@@ -133,15 +99,19 @@ def add_score():
         nature = "None"
     table.insert("", "end", tags="row", values=(f" {term} {course_name} {nature} {score} {credit}"))
 
-    clean_entries()  # 清空输入框
+    clear_entries(entries)  # 清空输入框
     set_default_entry_words()  # 设置默认文字
-    reset_blank_row()  # 重设空行
+    reset_blank_rows(table=table, min_rows=8, tag="row")  # 重设空行
 
 
 # 计算绩点（按钮）
 def calculate_gpa():
+    """Compute weighted average score and GPA from current table rows."""
+    global label_result
+
     # 处理错误数据函数（检查或删除）
     def deal_error_data(method):
+        """Check or delete invalid rows according to the selected method."""
         for child in table.get_children():
             row_data = table.item(child)["values"]
             if row_data:  # 如果不是空行
@@ -167,7 +137,7 @@ def calculate_gpa():
                         handle["error_data_included?"] = 1
                     continue
 
-    delete_label_result()  # 清除计算结果
+    clear_result_label(root=root, label_result=label_result, row=6, column=2)  # 清除计算结果
 
     # 初始化变量
     total_credit = 0
@@ -208,8 +178,7 @@ def calculate_gpa():
 
 
     # 除以总学分，计算出绩点，在窗口底部显示计算结果
-    global label_result
-    delete_label_result()
+    clear_result_label(root=root, label_result=label_result, row=6, column=2)
     if total_credit > 0:  # 如果总学分大于0
         score = round(total_scores / total_credit, 4)
         gpa = round(total_gpa / total_credit, 4)  # 计算出总绩点
@@ -227,6 +196,7 @@ def calculate_gpa():
 
 # 删除（按钮）
 def delete_score():
+    """Delete selected rows and keep them for potential undo."""
     deleted_scores.clear()  # 清空删除的成绩列表
 
     # 删除选中的数据，添加进列表
@@ -234,9 +204,9 @@ def delete_score():
         deleted_scores.append(table.item(item_id)["values"])
         table.delete(item_id)
 
-    reset_blank_row()  # 重设空行
-    delete_label_result()  # 清空计算结果
-    clean_entries()  # 清空输入框
+    reset_blank_rows(table=table, min_rows=8, tag="row")  # 重设空行
+    clear_result_label(root=root, label_result=label_result, row=6, column=2)  # 清空计算结果
+    clear_entries(entries)  # 清空输入框
     set_default_entry_words()  # 设置默认文字
 
     # 隐藏删除和覆盖按钮，显示撤销按钮
@@ -247,6 +217,7 @@ def delete_score():
 
 # 清空成绩（按钮）
 def delete_all_scores():
+    """Clear all rows from the table and keep them for undo."""
     deleted_scores.clear()  # 清空被删成绩列表
 
     # 删除所有成绩，添加进列表
@@ -254,9 +225,9 @@ def delete_all_scores():
         deleted_scores.append(table.item(child)["values"])
         table.delete(child)
 
-    reset_blank_row()  # 重设空行
-    delete_label_result()  # 清空计算结果
-    clean_entries()  # 清空输入框
+    reset_blank_rows(table=table, min_rows=8, tag="row")  # 重设空行
+    clear_result_label(root=root, label_result=label_result, row=6, column=2)  # 清空计算结果
+    clear_entries(entries)  # 清空输入框
     set_default_entry_words()  # 设置默认文字
 
     # 隐藏删除和覆盖按钮，显示撤销按钮
@@ -267,59 +238,27 @@ def delete_all_scores():
 
 # 解析（按钮）
 def analyse():
-    delete_label_result()  # 清空绩点计算结果
+    """Import score records from a selected PDF and insert them into the table."""
+    clear_result_label(root=root, label_result=label_result, row=6, column=2)  # 清空绩点计算结果
 
     # 弹框选择文件
     file_path = filedialog.askopenfilename(defaultextension=".pdf", filetypes=[("PDF files", "*.pdf")])
 
     # 读取内容确认是否是成绩单
-    with open(file_path, 'rb') as file:
-        reader = PyPDF2.PdfFileReader(file)
-        num_pages = reader.numPages
-        for page_num in range(num_pages):
-            page = reader.getPage(page_num)
-            text = page.extractText()
-            if text.find('南京信息工程大学本科生学业成绩表') == -1:
-                return tk.messagebox.showerror("错误", "解析失败，请选择正确的成绩单pdf文件")
+    if not is_valid_score_pdf(file_path, PDF_TITLE_KEYWORD):
+        return tk.messagebox.showerror("错误", "解析失败，请选择正确的成绩单pdf文件")
 
-    # 读取PDF中的所有表格
-    tables = camelot.read_pdf(file_path, pages='all')
-    score_table = tables[0].df
+    for row in parse_score_rows(file_path, PDF_STOP_KEYWORD):
+        table.insert("", "end", tags="row", values=row)
 
-    # 跳过第一行
-    score_table = score_table.iloc[1:]
-
-    # 分别获取四组数据
-    group1 = score_table.iloc[:, 0:4]
-    group2 = score_table.iloc[:, 4:8]
-    group3 = score_table.iloc[:, 8:12]
-
-    # 重置索引
-    group2.columns = group1.columns
-    group3.columns = group1.columns
-
-    # 拼接这些组
-    score_table = pd.concat([group1, group2, group3], ignore_index=True)
-
-    for _, row in score_table.iterrows():
-        if row[0] == '以下空白':
-            break
-        if not row[3]:
-            term = row[0]
-        else:
-            course_name = row[0]
-            nature = row[1]
-            score = row[3]
-            credit = row[2]
-            table.insert("", "end", tags="row", values=(f" {term} {course_name} {nature} {score} {credit}"))
-
-    reset_blank_row()  # 重设空行
-    clean_entries()  # 清空输入框
+    reset_blank_rows(table=table, min_rows=8, tag="row")  # 重设空行
+    clear_entries(entries)  # 清空输入框
     set_default_entry_words()  # 设置默认文字
 
 
 # 覆盖（按钮）
 def edit_score():
+    """Overwrite the currently selected row using values from input boxes."""
     # 将输入框的内容替换选中的数据
     selected_item = table.selection()[0]
     term = entry_term.get()
@@ -339,6 +278,7 @@ def edit_score():
 
 # 保存（按钮）
 def save_image():
+    """Render the current table and GPA summary into an image file."""
     global label_result
 
     # 创建画布和字体
@@ -408,27 +348,23 @@ def save_image():
 
 # 重设颜色
 def reset_color():
+    """Apply color variables to all relevant widgets."""
     global color_root
     global color_words
     global color_button_bg
     global color_button_abg
     global color_entry_bg
-    if handle["skin"] == "day":
-        color_root = "#ffe0ff"
-        color_words = "black"
-        color_button_bg = "#ffe190"
-        color_button_abg = "#efd180"
-        color_entry_bg = "#f0f0f0"
-    else:
-        color_root = "#202020"
-        color_words = "#e0e0e0"
-        color_button_bg = "#001e7f"
-        color_button_abg = "#000e6f"
-        color_entry_bg = "#2f2f2f"
+    colors = get_theme_colors(handle["skin"])
+    color_root = colors["root"]
+    color_words = colors["words"]
+    color_button_bg = colors["button_bg"]
+    color_button_abg = colors["button_abg"]
+    color_entry_bg = colors["entry_bg"]
 
 
 # 切换皮肤（按钮）
 def change_skin():
+    """Toggle between day and night themes and refresh widget colors."""
     # 设置skin状态
     if handle["skin"] == "day":
         handle["skin"] = "night"
@@ -447,7 +383,7 @@ def change_skin():
         if button != button_change_skin:
             button.configure(fg=color_words, activeforeground=color_words, bg=color_button_bg, activebackground=color_button_abg)
     for label in labels:
-        delete_label_result()
+        clear_result_label(root=root, label_result=label_result, row=6, column=2)
         calculate_gpa()
         if type(label) != int:
             label.configure(fg=color_words, bg=color_root)
@@ -457,28 +393,32 @@ def change_skin():
     # 离焦
     on_entry_term_focus_out('<FocusOut>')
     on_entry_course_name_focus_out('<FocusOut>')
+    on_entry_nature_focus_out('<FocusOut>')
 
 
 # 复制邮箱（按钮）
 def copy_email():
-    set_clipboard_content("LTongg@qq.com")
+    """Copy the project URL to the clipboard."""
+    set_clipboard_content(root, r"https://github.com/LTong-g/NUIST_GPA_calculator")
 
 
 # 撤销（按钮）
 def undo_delete():
+    """Restore rows that were deleted by the latest delete action."""
     for content in deleted_scores:
         table.insert("", "end", tags="row", values=tuple(content))
-    reset_blank_row()
+    reset_blank_rows(table=table, min_rows=8, tag="row")
     deleted_scores.clear()
     button_undo_delete.grid_remove()
 
 
 # 选中行（绑定函数）
 def on_select(event):
+    """Handle table row selection and sync selected values to input boxes."""
     if table.selection():
         button_delete_score.grid()  # 显示删除按钮
         button_edit_score.grid()  # 显示覆盖按钮
-        clean_entries()  # 清空输入框
+        clear_entries(entries)  # 清空输入框
 
         # 获取选中的行的数据
         selected_item = table.selection()[0]
@@ -507,6 +447,7 @@ def on_select(event):
 
 # 聚焦学期输入框（绑定函数）
 def on_entry_term_focus_in(event):
+    """Clear the term placeholder text when the field gains focus."""
     if entry_term.get() == '可不填':
         entry_term.delete(0, tk.END)
     entry_term.configure(fg=color_words)
@@ -514,6 +455,7 @@ def on_entry_term_focus_in(event):
 
 # 离焦学期输入框（绑定函数）
 def on_entry_term_focus_out(event):
+    """Restore the term placeholder when the field is left empty."""
     if not entry_term.get():
         entry_term.insert(0, '可不填')
         entry_term.configure(fg="grey")
@@ -523,6 +465,7 @@ def on_entry_term_focus_out(event):
 
 # 聚焦课程名称输入框（绑定函数）
 def on_entry_course_name_focus_in(event):
+    """Clear the course-name placeholder text when focused."""
     if entry_course_name.get() == '可不填':
         entry_course_name.delete(0, tk.END)
     entry_course_name.configure(fg=color_words)
@@ -530,6 +473,7 @@ def on_entry_course_name_focus_in(event):
 
 # 离焦课程名称输入框（绑定函数）
 def on_entry_course_name_focus_out(event):
+    """Restore the course-name placeholder when left empty."""
     if not entry_course_name.get():
         entry_course_name.configure(fg="grey")
         entry_course_name.insert(0, '可不填')
@@ -539,6 +483,7 @@ def on_entry_course_name_focus_out(event):
 
 # 聚焦课程性质输入框（绑定函数)
 def on_entry_nature_focus_in(event):
+    """Clear the course-type hint text when the field gains focus."""
     if entry_nature.get() == '输入包含“选”字为选修课，否则为必修':
         entry_nature.delete(0, tk.END)
     entry_nature.configure(fg=color_words)
@@ -546,6 +491,7 @@ def on_entry_nature_focus_in(event):
 
 # 离焦课程性质输入框（绑定函数）
 def on_entry_nature_focus_out(event):
+    """Restore the course-type hint text when left empty."""
     if not entry_nature.get():
         entry_nature.configure(fg="grey")
         entry_nature.insert(0, '输入包含“选”字为选修课，否则为必修')
@@ -555,6 +501,7 @@ def on_entry_nature_focus_out(event):
 
 # 创建帮助子窗口
 def run_help():
+    """Open the help window and show usage instructions."""
     if not handle["window_help_open?"]:
         handle["window_help_open?"] = 1
         window_help = tk.Toplevel()
@@ -593,6 +540,7 @@ def run_help():
 
         # 关闭window_help函数
         def close_window_help():
+            """Handle help-window close events and reset open-state flag."""
             handle["window_help_open?"] = 0
             window_help.destroy()
         window_help.protocol('WM_DELETE_WINDOW', close_window_help)
@@ -628,7 +576,7 @@ table.column("col2", width=140, anchor="center")
 table.column("col3", width=-20, anchor="center")
 table.column("col4", width=-20, anchor="center")
 table.column("col5", width=-50, anchor="center")
-reset_blank_row()
+reset_blank_rows(table=table, min_rows=8, tag="row")
 
 # 设置滚动条
 y_scrollbar.config(command=table.yview)
@@ -640,7 +588,7 @@ root.rowconfigure(5, weight=1)
 
 # 创建标签和输入框
 label_author = tk.Label(root, text="by.LTongg")
-label_email = tk.Label(root, text="问题反馈/联系方式：LTongg@qq.com")
+label_email = tk.Label(root, text="问题反馈/联系方式：https://github.com/LTong-g/NUIST_GPA_calculator")
 label_term = tk.Label(root, text="学期：")
 entry_term = tk.Entry(root, width=52)
 label_course_name = tk.Label(root, text="课程名称：")
@@ -689,7 +637,7 @@ button_analyse = tk.Button(root, width=6, text="解析", command=analyse)  # 解
 button_edit_score = tk.Button(root, width=6, text="覆盖", command=edit_score)  # 覆盖按钮
 button_help = tk.Button(root, width=9, text="使用说明", command=run_help)  # 使用说明
 button_change_skin = tk.Button(root, width=3, text="🌛", fg="purple", activeforeground="purple", bg="#ffe190", activebackground="#efd180", relief="groove", command=change_skin)  # 切换皮肤
-button_copy_email = tk.Button(root, width=9, text="复制邮箱", command=copy_email)  # 复制邮箱
+button_copy_email = tk.Button(root, width=9, text="复制网址", command=copy_email)  # 复制网址
 button_undo_delete = tk.Button(root, width=6, text="撤销", command=undo_delete)  # 撤销删除
 
 # 添加按钮到对应列表
