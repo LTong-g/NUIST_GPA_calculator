@@ -5,6 +5,7 @@ import datetime
 import camelot
 import pandas as pd
 import PyPDF2
+import os
 
 
 # handle字典
@@ -604,7 +605,12 @@ root.title("绩点计算器")  # 设置窗口标题
 root.geometry("600x400")  # 设置窗口大小
 root.configure(bg="#ffe0ff")  # 设置窗口底色
 root.resizable(False, False)  # 不可改变大小
-root.iconphoto(False, tk.PhotoImage(file=r"image\图标.png"))  # 设置窗口左上角图标
+icon_path = r"image\图标.png"
+if os.path.exists(icon_path):
+    try:
+        root.iconphoto(False, tk.PhotoImage(file=icon_path))  # 设置窗口左上角图标
+    except tk.TclError:
+        pass
 
 # 创建滚动条
 y_scrollbar = tk.Scrollbar(root, orient="vertical")
