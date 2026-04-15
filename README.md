@@ -4,19 +4,20 @@
 疑似系统更新，成绩单pdf变成图片，识别不到内容。暂未修复。
 
 ## 2024.5
+由于系统更新，做出如下修改：
 1. 解析方式从“粘贴教务表格文本”改为“直接读取成绩单 PDF”：
    - `main.py` 新增 `camelot`、`pandas`、`PyPDF2` 依赖；
    - `analyse()` 改为文件选择 + PDF 校验 + 表格抽取与拼接导入。
 
-2. 移除了在线更新相关能力：
-   - 去掉 `import Update`；
-   - 去掉启动时自动检测/下载更新；
-   - 去掉“检查更新”按钮与 `check_version()` 入口。
-
-3. 移除了粘贴输入区相关逻辑：
+2. 移除了粘贴输入区相关逻辑：
    - 去掉 `entry_paste`/`label_paste`；
    - 去掉 `set_default_paste_entry_words()`；
    - 去掉粘贴框 FocusIn/FocusOut 事件绑定。
+
+3. 移除了在线更新相关能力：
+   - 去掉 `import Update`；
+   - 去掉启动时自动检测/下载更新；
+   - 去掉“检查更新”按钮与 `check_version()` 入口。
 
 ## 2023.6
 __主要功能：__  
