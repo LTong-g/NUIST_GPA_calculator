@@ -2,12 +2,10 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageDraw, ImageFont
 import datetime
-import Update
+import camelot
+import pandas as pd
+import PyPDF2
 
-try:
-    Update.download_update()
-except:
-    pass
 
 # handle字典
 handle = {"window_help_open?": 0,
@@ -37,12 +35,6 @@ color_button_bg = "#ffe190"  # 设置按钮初始background
 color_button_abg = "#efd180"  # 设置按钮初始active background
 color_entry_bg = "#f0f0f0"  # 设置输入框初始background
 
-# 设置检查更新函数
-def check_version():
-    if Update.check_version():
-        Update.download_update()
-    else:
-        tk.messagebox.showinfo("", "已是最新版本")
 
 # 设置默认输入框文字
 def set_default_entry_words():
@@ -52,12 +44,6 @@ def set_default_entry_words():
     entry_course_name.insert(0, '可不填')
     entry_nature.configure(fg="grey")
     entry_nature.insert(0, '输入包含“选”字为选修课，否则为必修')
-
-
-# 设置默认粘贴框文字
-def set_default_paste_entry_words():
-    entry_paste.configure(fg="grey")
-    entry_paste.insert(0, '从教务系统查分，选中从左上角第一格到右下角最后一格（包括空格），复制到此处')
 
 
 # 重设空行
@@ -227,14 +213,14 @@ def calculate_gpa():
         score = round(total_scores / total_credit, 4)
         gpa = round(total_gpa / total_credit, 4)  # 计算出总绩点
         if total_must_credit > 0:  # 如果总必修学分大于0
+            must_score = round(total_must_scores / total_must_credit, 4)  # 计算出必修加权平均分
             must_gpa = round(total_must_gpa / total_must_credit, 4)  # 计算出必修绩点
-        else:
-            pass
+
         if check_selective_involved_variable.get():
-            label_result = tk.Label(root, text=f"共获学分：{total_credit}（{total_must_credit} + {total_credit - total_must_credit})    加权平均分：{score}    平均绩点：{gpa}", fg="red" if handle["skin"] == "day" else "#ffa0a0", bg=color_root)
+            label_result = tk.Label(root, text=f"共获学分：{total_credit}    加权平均分：{score}    平均绩点：{gpa}", fg="red" if handle["skin"] == "day" else "#ffa0a0", bg=color_root)
             label_result.grid(row=6, column=2, sticky="e")
         else:
-            label_result = tk.Label(root, text=f"共获学分：{total_credit}（{total_must_credit} + {total_credit - total_must_credit})    加权平均分：{score}    平均绩点：{must_gpa}", fg="red" if handle["skin"] == "day" else "#ffa0a0", bg=color_root)
+            label_result = tk.Label(root, text=f"共获学分：{total_must_credit}    加权平均分：{must_score}    平均绩点：{must_gpa}", fg="red" if handle["skin"] == "day" else "#ffa0a0", bg=color_root)
             label_result.grid(row=6, column=2, sticky="e")
 
 
@@ -271,7 +257,6 @@ def delete_all_scores():
     delete_label_result()  # 清空计算结果
     clean_entries()  # 清空输入框
     set_default_entry_words()  # 设置默认文字
-    set_default_paste_entry_words()
 
     # 隐藏删除和覆盖按钮，显示撤销按钮
     button_edit_score.grid_remove()
@@ -283,22 +268,49 @@ def delete_all_scores():
 def analyse():
     delete_label_result()  # 清空绩点计算结果
 
-    # 获取粘贴的成绩信息并按换行符拆分（每行为一个元素）
-    content = entry_paste.get()
-    content = content.split("\n")
-    for _ in range(content.count("")):
-        content.remove("")
+    # 弹框选择文件
+    file_path = filedialog.askopenfilename(defaultextension=".pdf", filetypes=[("PDF files", "*.pdf")])
 
-    # 对行元素取[1]位为开设学期，[2]位为课程名称，[3]位为课程性质，[4]位为分数，[7]位为学分
-    for i in range(len(content)):
-        content_child = content[i].split("\t")
-        term = content_child[1]
-        course_name = content_child[2]
-        nature = content_child[3]
-        score = content_child[4]
-        credit = content_child[7]
-        # 将成绩信息添加到tabel中，
-        table.insert("", "end", tags="row", values=(f"{term} {course_name} {nature} {score} {credit}"))
+    # 读取内容确认是否是成绩单
+    with open(file_path, 'rb') as file:
+        reader = PyPDF2.PdfFileReader(file)
+        num_pages = reader.numPages
+        for page_num in range(num_pages):
+            page = reader.getPage(page_num)
+            text = page.extractText()
+            if text.find('南京信息工程大学本科生学业成绩表') == -1:
+                return tk.messagebox.showerror("错误", "解析失败，请选择正确的成绩单pdf文件")
+
+    # 读取PDF中的所有表格
+    tables = camelot.read_pdf(file_path, pages='all')
+    score_table = tables[0].df
+
+    # 跳过第一行
+    score_table = score_table.iloc[1:]
+
+    # 分别获取四组数据
+    group1 = score_table.iloc[:, 0:4]
+    group2 = score_table.iloc[:, 4:8]
+    group3 = score_table.iloc[:, 8:12]
+
+    # 重置索引
+    group2.columns = group1.columns
+    group3.columns = group1.columns
+
+    # 拼接这些组
+    score_table = pd.concat([group1, group2, group3], ignore_index=True)
+
+    for _, row in score_table.iterrows():
+        if row[0] == '以下空白':
+            break
+        if not row[3]:
+            term = row[0]
+        else:
+            course_name = row[0]
+            nature = row[1]
+            score = row[3]
+            credit = row[2]
+            table.insert("", "end", tags="row", values=(f" {term} {course_name} {nature} {score} {credit}"))
 
     reset_blank_row()  # 重设空行
     clean_entries()  # 清空输入框
@@ -444,8 +456,6 @@ def change_skin():
     # 离焦
     on_entry_term_focus_out('<FocusOut>')
     on_entry_course_name_focus_out('<FocusOut>')
-    on_entry_nature_focus_out('<FocusOut>')
-    on_entry_paste_focus_out('<FocusOut>')
 
 
 # 复制邮箱（按钮）
@@ -492,22 +502,6 @@ def on_select(event):
             entry_nature.insert(0, nature)
             entry_score.insert(0, score)
             entry_credit.insert(0, credit)
-
-
-# 聚焦粘贴输入框（绑定函数）
-def on_entry_paste_focus_in(event):
-    if entry_paste.get() == '从教务系统查分，选中从左上角第一格到右下角最后一格（包括空格），复制到此处':
-        entry_paste.delete(0, tk.END)
-    entry_paste.configure(fg=color_words)
-
-
-# 离焦粘贴输入框（绑定函数）
-def on_entry_paste_focus_out(event):
-    if not entry_paste.get():
-        entry_paste.configure(fg="grey")
-        entry_paste.insert(0, '从教务系统查分，选中从左上角第一格到右下角最后一格（包括空格），复制到此处')
-    if entry_paste.get() == '从教务系统查分，选中从左上角第一格到右下角最后一格（包括空格），复制到此处':
-        entry_paste.configure(fg="grey")
 
 
 # 聚焦学期输入框（绑定函数）
@@ -573,7 +567,7 @@ def run_help():
 删除成绩：选中一行或多行成绩后点击“删除”按钮。
 覆盖成绩：选中一行数据后内容将显示在上方输入框，修改后点击“覆盖”按钮即可覆盖原成绩。
 清空成绩：点击“清空成绩”按钮清空成绩。
-解析：进入南信大本科教务系统，查询成绩，选择从第一行第一格到最后一行最后一格，复制粘贴进底部输入框，点击“解析”按钮。
+解析：进入南信大本科新教务系统，成绩单/证明打印，下载成绩单pdf文件。点击“解析”按钮，选择下载的成绩单文件。
 保存：点击“保存”按钮，将成绩保存为图片。
 附：成绩与绩点对照关系和绩点计算公式。
 ##############################################################
@@ -651,8 +645,6 @@ label_score = tk.Label(root, text="总评成绩：")
 entry_score = tk.Entry(root, width=52)
 label_credit = tk.Label(root, text="学分：")
 entry_credit = tk.Entry(root, width=52)
-label_paste = tk.Label(root, text="粘贴：")
-entry_paste = tk.Entry(root, width=64)
 label_result = 0
 
 # 添加标签和输入框到对应列表
@@ -663,14 +655,12 @@ labels.append(label_course_name)
 labels.append(label_nature)
 labels.append(label_score)
 labels.append(label_credit)
-labels.append(label_paste)
 labels.append(label_result)
 entries.append(entry_term)
 entries.append(entry_course_name)
 entries.append(entry_nature)
 entries.append(entry_score)
 entries.append(entry_credit)
-entries.append(entry_paste)
 
 # 设置标签和输入框颜色
 for label in labels:
@@ -695,7 +685,6 @@ button_help = tk.Button(root, width=9, text="使用说明", command=run_help)  #
 button_change_skin = tk.Button(root, width=3, text="🌛", fg="purple", activeforeground="purple", bg="#ffe190", activebackground="#efd180", relief="groove", command=change_skin)  # 切换皮肤
 button_copy_email = tk.Button(root, width=9, text="复制邮箱", command=copy_email)  # 复制邮箱
 button_undo_delete = tk.Button(root, width=6, text="撤销", command=undo_delete)  # 撤销删除
-button_check_version = tk.Button(root, width=9, text="检查更新", command=check_version)  # 检查更新
 
 # 添加按钮到对应列表
 buttons.append(button_add_score)
@@ -709,7 +698,6 @@ buttons.append(button_help)
 buttons.append(button_change_skin)
 buttons.append(button_copy_email)
 buttons.append(button_undo_delete)
-buttons.append(button_check_version)
 
 # 设置按钮样式
 for button in buttons:
@@ -720,8 +708,8 @@ for button in buttons:
 table.grid(row=5, column=2, sticky="nsew")
 
 # 设置标签和输入框位置
-label_author.grid(row=8, column=0, columnspan=4, sticky="w")
-label_email.grid(row=8, column=0, columnspan=4, padx=75, sticky="e")
+label_author.grid(row=7, column=0, columnspan=4, sticky="w")
+label_email.grid(row=7, column=0, columnspan=4, padx=75, sticky="e")
 label_term.grid(row=0, column=2, sticky="w")
 entry_term.grid(row=0, column=2)
 label_course_name.grid(row=1, column=2, sticky="w")
@@ -732,8 +720,6 @@ label_score.grid(row=3, column=2, sticky="w")
 entry_score.grid(row=3, column=2)
 label_credit.grid(row=4, column=2, sticky="w")
 entry_credit.grid(row=4, column=2)
-label_paste.grid(row=7, column=2, sticky="w")
-entry_paste.grid(row=7, column=2, sticky="e")
 
 # 设置复选框位置
 check_selective_involved.grid(row=2, rowspan=2, column=2, columnspan=2, pady=3, sticky="se")
@@ -742,15 +728,14 @@ check_selective_involved.grid(row=2, rowspan=2, column=2, columnspan=2, pady=3, 
 button_add_score.grid(row=3, column=2, rowspan=2, sticky="se")
 button_calculate_gpa.grid(row=3, column=3, rowspan=2, sticky="se")
 button_save_image.grid(row=5, column=3, sticky="se")
-button_delete_score.grid(row=5, column=3, sticky="ne")
+button_delete_score.grid(row=5, column=3, pady=30, sticky="ne")
 button_delete_all_scores.grid(row=6, column=3, sticky="e")
-button_analyse.grid(row=7, column=3, sticky="e")
-button_edit_score.grid(row=5, column=3, pady=30, sticky="ne")
+button_analyse.grid(row=5, column=3, sticky="ne")
+button_edit_score.grid(row=5, column=3, pady=60, sticky="ne")
 button_help.grid(row=0, column=3, rowspan=2, sticky="ne")
 button_change_skin.grid(row=0, column=2, rowspan=2, sticky="ne")
-button_copy_email.grid(row=8, column=2, columnspan=2, sticky="se")
+button_copy_email.grid(row=7, column=2, columnspan=2, sticky="se")
 button_undo_delete.grid(row=5, column=3, pady=30, sticky="se")
-button_check_version.grid(row=0, column=3, rowspan=4, pady=30, sticky="ne")
 
 # 隐藏删除、覆盖、撤销按钮
 button_delete_score.grid_remove()
@@ -759,8 +744,6 @@ button_undo_delete.grid_remove()
 
 # 绑定事件
 table.bind("<<TreeviewSelect>>", on_select)
-entry_paste.bind('<FocusIn>', on_entry_paste_focus_in)
-entry_paste.bind('<FocusOut>', on_entry_paste_focus_out)
 entry_term.bind('<FocusIn>', on_entry_term_focus_in)
 entry_term.bind('<FocusOut>', on_entry_term_focus_out)
 entry_course_name.bind('<FocusIn>', on_entry_course_name_focus_in)
@@ -768,10 +751,8 @@ entry_course_name.bind('<FocusOut>', on_entry_course_name_focus_out)
 entry_nature.bind('<FocusIn>', on_entry_nature_focus_in)
 entry_nature.bind('<FocusOut>', on_entry_nature_focus_out)
 
-
 # 设置默认文字
 set_default_entry_words()
-set_default_paste_entry_words()
 
 # 启动窗口循环
 root.mainloop()
